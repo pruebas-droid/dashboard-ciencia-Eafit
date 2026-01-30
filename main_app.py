@@ -3,126 +3,197 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from io import BytesIO
 
 # Set page config
-st.set_page_config(page_title="Dashboard", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Smart Data Dashboard", layout="wide", initial_sidebar_state="expanded")
 
-# Title and description
-st.title("📊 Random Database Dashboard")
+# Title
+st.title("📊 Smart Data Dashboard")
+st.markdown("Upload CSV, Excel, or other data files for automatic analysis and visualization")
 st.markdown("---")
 
-# Generate random database
-@st.cache_data
-def generate_database():
-    """Generate a random database with sales data"""
-    np.random.seed(42)
-    
-    dates = [datetime.now() - timedelta(days=x) for x in range(90)]
-    products = ["Product A", "Product B", "Product C", "Product D", "Product E"]
-    regions = ["North", "South", "East", "West"]
-    
-    data = {
-        "Date": np.repeat(dates, 20),
-        "Product": np.tile(np.repeat(products, 4), 90),
-        "Region": np.tile(regions, 450),
-        "Sales": np.random.randint(100, 5000, 1800),
-        "Quantity": np.random.randint(1, 100, 1800),
-        "Customer_ID": np.random.randint(1000, 9999, 1800)
-    }
-    
-    df = pd.DataFrame(data)
-    df["Date"] = pd.to_datetime(df["Date"])
-    df["Revenue"] = df["Sales"] * df["Quantity"]
-    return df
+def is_quantitative(series):
+    """Determine if a series is quantitative (numerical) or qualitative (categorical)"""
+    if pd.api.types.is_numeric_dtype(series):
+        return True
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+    return False
 
-# Load data
-df = generate_database()
+def plot_quantitative_column(df, col_name):
+    """Create visualizations for quantitative data"""
+    fig = px.histogram(
+        df,
+        x=col_name,
+        nbins=30,
+        title=f"📊 Distribution of {col_name}",
+        labels={col_name: col_name},
+        color_discrete_sequence=["#1f77b4"]
+    )
+    fig.update_layout(showlegend=False)
+    return fig
 
-# Sidebar filters
-st.sidebar.header("🔧 Filters")
-selected_product = st.sidebar.multiselect("Select Products", options=df["Product"].unique(), default=df["Product"].unique())
-selected_region = st.sidebar.multiselect("Select Regions", options=df["Region"].unique(), default=df["Region"].unique())
-
-# Apply filters
-filtered_df = df[(df["Product"].isin(selected_product)) & (df["Region"].isin(selected_region))]
-
-# Key metrics
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric("Total Revenue", f"${filtered_df['Revenue'].sum():,.0f}")
-
-with col2:
-    st.metric("Total Sales", f"${filtered_df['Sales'].sum():,.0f}")
-
-with col3:
-    st.metric("Total Quantity", f"{filtered_df['Quantity'].sum():,.0f}")
-
-with col4:
-    st.metric("Unique Customers", f"{filtered_df['Customer_ID'].nunique()}")
-
-st.markdown("---")
-
-# Row 1: Charts
-col1, col2 = st.columns(2)
-
-with col1:
-    # Sales by Product
-    sales_by_product = filtered_df.groupby("Product")["Sales"].sum().sort_values(ascending=False)
-    fig1 = px.bar(
-        x=sales_by_product.index,
-        y=sales_by_product.values,
-        labels={"x": "Product", "y": "Sales"},
-        title="📦 Sales by Product",
-        color=sales_by_product.values,
+def plot_qualitative_column(df, col_name):
+    """Create visualizations for qualitative data"""
+    value_counts = df[col_name].value_counts().head(15)
+    fig = px.bar(
+        x=value_counts.index,
+        y=value_counts.values,
+        title=f"📈 Frequency of {col_name}",
+        labels={"x": col_name, "y": "Count"},
+        color=value_counts.values,
         color_continuous_scale="Viridis"
     )
-    st.plotly_chart(fig1, use_container_width=True)
+    fig.update_layout(showlegend=False)
+    return fig
 
-with col2:
-    # Revenue by Region
-    revenue_by_region = filtered_df.groupby("Region")["Revenue"].sum().sort_values(ascending=False)
-    fig2 = px.pie(
-        values=revenue_by_region.values,
-        names=revenue_by_region.index,
-        title="🗺️ Revenue by Region"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+def load_data(file):
+    """Load data from uploaded file"""
+    try:
+        if file.name.endswith('.csv'):
+            return pd.read_csv(file)
+        elif file.name.endswith(('.xlsx', '.xls')):
+            return pd.read_excel(file)
+        elif file.name.endswith('.parquet'):
+            return pd.read_parquet(file)
+        else:
+            st.error("Unsupported file format. Please use CSV, Excel, or Parquet.")
+            return None
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
+        return None
 
-# Row 2: Time series
-st.subheader("📈 Sales Trend Over Time")
-daily_sales = filtered_df.groupby("Date").agg({"Sales": "sum", "Quantity": "sum", "Revenue": "sum"}).reset_index()
-fig3 = px.line(
-    daily_sales,
-    x="Date",
-    y=["Sales", "Revenue"],
-    title="Sales and Revenue Trend",
-    markers=True,
-    labels={"value": "Amount ($)", "variable": "Metric"}
-)
-st.plotly_chart(fig3, use_container_width=True)
+# Sidebar - File Upload
+st.sidebar.header("📁 Upload Data")
+uploaded_file = st.sidebar.file_uploader("Choose a file", type=['csv', 'xlsx', 'xls', 'parquet'])
 
-# Row 3: Data table
-st.subheader("📋 Data Sample")
-st.dataframe(
-    filtered_df.head(10),
-    use_container_width=True,
-    hide_index=True
-)
-
-# Statistics
-st.subheader("📊 Statistics")
-col1, col2 = st.columns(2)
-
-with col1:
-    st.write("**Sales Statistics**")
-    st.write(filtered_df["Sales"].describe())
-
-with col2:
-    st.write("**Quantity Statistics**")
-    st.write(filtered_df["Quantity"].describe())
-
-st.markdown("---")
-st.caption("Dashboard generated with Streamlit | Data refreshes every session")
-
+if uploaded_file is not None:
+    # Load data
+    df = load_data(uploaded_file)
+    
+    if df is not None:
+        st.sidebar.success("✅ File loaded successfully!")
+        
+        # Display basic info
+        st.subheader("📋 Data Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Rows", f"{df.shape[0]:,}")
+        with col2:
+            st.metric("Columns", f"{df.shape[1]}")
+        with col3:
+            quantitative_cols = sum([is_quantitative(df[col]) for col in df.columns])
+            st.metric("Quantitative", quantitative_cols)
+        with col4:
+            qualitative_cols = df.shape[1] - quantitative_cols
+            st.metric("Qualitative", qualitative_cols)
+        
+        st.markdown("---")
+        
+        # Sidebar filters
+        st.sidebar.header("🔧 Filters")
+        
+        # Get qualitative columns for filtering
+        qualitative_columns = [col for col in df.columns if not is_quantitative(df[col])]
+        
+        filters = {}
+        for col in qualitative_columns[:5]:  # Limit to 5 filters
+            unique_values = df[col].unique()
+            if len(unique_values) <= 50:  # Only show filter if reasonable number of values
+                selected = st.sidebar.multiselect(
+                    f"Filter by {col}",
+                    options=unique_values,
+                    default=unique_values
+                )
+                if selected:
+                    filters[col] = selected
+        
+        # Apply filters
+        filtered_df = df.copy()
+        for col, values in filters.items():
+            filtered_df = filtered_df[filtered_df[col].isin(values)]
+        
+        # Display data sample
+        st.subheader("📊 Data Sample")
+        st.dataframe(filtered_df.head(10), use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        
+        # Separate columns by type
+        quantitative_cols = [col for col in filtered_df.columns if is_quantitative(filtered_df[col])]
+        qualitative_cols = [col for col in filtered_df.columns if not is_quantitative(filtered_df[col])]
+        
+        # Quantitative Data Visualizations
+        if quantitative_cols:
+            st.subheader("📈 Quantitative Data Analysis")
+            
+            # Display histograms for quantitative columns
+            for i, col in enumerate(quantitative_cols[:4]):  # Show first 4
+                if i % 2 == 0:
+                    cols = st.columns(2)
+                try:
+                    fig = plot_quantitative_column(filtered_df, col)
+                    cols[i % 2].plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    cols[i % 2].warning(f"Could not plot {col}: {e}")
+            
+            st.markdown("---")
+            
+            # Correlation heatmap for multiple quantitative columns
+            if len(quantitative_cols) > 1:
+                st.subheader("🔗 Correlation Matrix")
+                corr_matrix = filtered_df[quantitative_cols].corr()
+                fig = px.imshow(
+                    corr_matrix,
+                    labels=dict(color="Correlation"),
+                    x=quantitative_cols,
+                    y=quantitative_cols,
+                    color_continuous_scale="RdBu_r",
+                    zmin=-1,
+                    zmax=1,
+                    title="Correlation Between Numeric Columns"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.markdown("---")
+            
+            # Statistics
+            st.subheader("📊 Statistics")
+            st.dataframe(filtered_df[quantitative_cols].describe(), use_container_width=True)
+            st.markdown("---")
+        
+        # Qualitative Data Visualizations
+        if qualitative_cols:
+            st.subheader("🏷️ Qualitative Data Analysis")
+            
+            # Display bar charts for qualitative columns
+            for i, col in enumerate(qualitative_cols[:4]):  # Show first 4
+                if i % 2 == 0:
+                    cols = st.columns(2)
+                try:
+                    fig = plot_qualitative_column(filtered_df, col)
+                    cols[i % 2].plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    cols[i % 2].warning(f"Could not plot {col}: {e}")
+            
+            st.markdown("---")
+        
+        # Combined analysis if both types exist
+        if quantitative_cols and qualitative_cols:
+            st.subheader("🔀 Combined Analysis")
+            
+            selected_quant = st.selectbox("Select numeric column", quantitative_cols)
+            selected_qual = st.selectbox("Select categorical column", qualitative_cols)
+            
+            if selected_quant and selected_qual:
+                fig = px.box(
+                    filtered_df,
+                    x=selected_qual,
+                    y=selected_quant,
+                    title=f"{selected_quant} by {selected_qual}",
+                    color=selected_qual
+                )
+                st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("👆 Upload a CSV, Excel, or Parquet file to get started!")
