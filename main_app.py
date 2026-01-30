@@ -21,32 +21,21 @@ def is_quantitative(series):
         return True
     return False
 
-def plot_quantitative_column(df, col_name):
-    """Create visualizations for quantitative data"""
-    fig = px.histogram(
-        df,
-        x=col_name,
-        nbins=30,
-        title=f"📊 Distribution of {col_name}",
-        labels={col_name: col_name},
-        color_discrete_sequence=["#1f77b4"]
-    )
-    fig.update_layout(showlegend=False)
-    return fig
+def is_categorical(series):
+    """Determine if a series is categorical"""
+    return not is_quantitative(series)
 
-def plot_qualitative_column(df, col_name):
-    """Create visualizations for qualitative data"""
-    value_counts = df[col_name].value_counts().head(15)
-    fig = px.bar(
-        x=value_counts.index,
-        y=value_counts.values,
-        title=f"📈 Frequency of {col_name}",
-        labels={"x": col_name, "y": "Count"},
-        color=value_counts.values,
-        color_continuous_scale="Viridis"
-    )
-    fig.update_layout(showlegend=False)
-    return fig
+def clean_data(df):
+    """Clean data: handle NA, spaces, duplicates, etc."""
+    df_clean = df.copy()
+    
+    # Replace spaces with NaN for string columns
+    for col in df_clean.columns:
+        if df_clean[col].dtype == 'object':
+            df_clean[col] = df_clean[col].replace(r'^\s*$', np.nan, regex=True)
+            df_clean[col] = df_clean[col].str.strip() if df_clean[col].dtype == 'object' else df_clean[col]
+    
+    return df_clean
 
 def load_data(file):
     """Load data from uploaded file"""
@@ -75,125 +64,308 @@ if uploaded_file is not None:
     if df is not None:
         st.sidebar.success("✅ File loaded successfully!")
         
-        # Display basic info
-        st.subheader("📋 Data Overview")
-        col1, col2, col3, col4 = st.columns(4)
+        # ============================================
+        # SECTION 1: DATA CLEANING
+        # ============================================
+        st.header("🧹 Section 1: Data Cleaning")
+        
+        # Show original data info
+        col1, col2 = st.columns(2)
         
         with col1:
+            st.subheader("Original Data")
             st.metric("Rows", f"{df.shape[0]:,}")
-        with col2:
             st.metric("Columns", f"{df.shape[1]}")
-        with col3:
-            quantitative_cols = sum([is_quantitative(df[col]) for col in df.columns])
-            st.metric("Quantitative", quantitative_cols)
-        with col4:
-            qualitative_cols = df.shape[1] - quantitative_cols
-            st.metric("Qualitative", qualitative_cols)
+            st.metric("Missing Values", f"{df.isnull().sum().sum():,}")
+            st.metric("Duplicates", f"{df.duplicated().sum():,}")
+        
+        # Clean data
+        df_clean = clean_data(df)
+        
+        # Show cleaning options
+        st.subheader("🛠️ Cleaning Options")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        remove_duplicates = col1.checkbox("Remove Duplicates", value=True)
+        remove_na = col2.checkbox("Remove Rows with NA", value=False)
+        fill_na_strategy = col3.selectbox("Fill NA Strategy", ["Keep", "Drop Column", "Forward Fill", "Backward Fill", "Mean (numeric only)"])
+        
+        # Apply selected cleaning
+        if remove_duplicates:
+            df_clean = df_clean.drop_duplicates()
+        
+        if fill_na_strategy == "Drop Column":
+            df_clean = df_clean.dropna(axis=1, how='all')
+        elif fill_na_strategy == "Forward Fill":
+            df_clean = df_clean.fillna(method='ffill')
+        elif fill_na_strategy == "Backward Fill":
+            df_clean = df_clean.fillna(method='bfill')
+        elif fill_na_strategy == "Mean (numeric only)":
+            numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
+            df_clean[numeric_cols] = df_clean[numeric_cols].fillna(df_clean[numeric_cols].mean())
+        
+        if remove_na:
+            df_clean = df_clean.dropna()
+        
+        # Show cleaned data info
+        with col2:
+            st.subheader("Cleaned Data")
+            st.metric("Rows", f"{df_clean.shape[0]:,}")
+            st.metric("Columns", f"{df_clean.shape[1]}")
+            st.metric("Missing Values", f"{df_clean.isnull().sum().sum():,}")
+            st.metric("Duplicates", f"{df_clean.duplicated().sum():,}")
+        
+        # Show data quality report
+        st.subheader("📊 Data Quality Report")
+        quality_data = []
+        for col in df_clean.columns:
+            quality_data.append({
+                "Column": col,
+                "Type": str(df_clean[col].dtype),
+                "Non-Null %": f"{(1 - df_clean[col].isnull().sum() / len(df_clean)) * 100:.1f}%",
+                "Unique Values": df_clean[col].nunique()
+            })
+        
+        st.dataframe(pd.DataFrame(quality_data), use_container_width=True, hide_index=True)
         
         st.markdown("---")
         
-        # Sidebar filters
-        st.sidebar.header("🔧 Filters")
+        # Display cleaned data sample
+        st.subheader("📋 Cleaned Data Sample")
+        st.dataframe(df_clean.head(10), use_container_width=True, hide_index=True)
         
-        # Get qualitative columns for filtering
-        qualitative_columns = [col for col in df.columns if not is_quantitative(df[col])]
+        st.markdown("---")
+        
+        # ============================================
+        # SECTION 2: EXPLORATORY DATA ANALYSIS (EDA)
+        # ============================================
+        st.header("📈 Section 2: Exploratory Data Analysis")
+        
+        # Separate columns by type
+        quantitative_cols = [col for col in df_clean.columns if is_quantitative(df_clean[col])]
+        qualitative_cols = [col for col in df_clean.columns if is_categorical(df_clean[col])]
+        
+        st.subheader("📊 Data Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Rows", f"{df_clean.shape[0]:,}")
+        with col2:
+            st.metric("Total Columns", f"{df_clean.shape[1]}")
+        with col3:
+            st.metric("Numeric Columns", len(quantitative_cols))
+        with col4:
+            st.metric("Categorical Columns", len(qualitative_cols))
+        
+        st.markdown("---")
+        
+        # Sidebar filters for EDA
+        st.sidebar.header("🔍 EDA Filters")
         
         filters = {}
-        for col in qualitative_columns[:5]:  # Limit to 5 filters
-            unique_values = df[col].unique()
-            if len(unique_values) <= 50:  # Only show filter if reasonable number of values
+        for col in qualitative_cols[:5]:
+            unique_values = df_clean[col].unique()
+            if len(unique_values) <= 50:
                 selected = st.sidebar.multiselect(
                     f"Filter by {col}",
-                    options=unique_values,
-                    default=unique_values
+                    options=sorted([str(v) for v in unique_values]),
+                    default=[str(v) for v in unique_values]
                 )
                 if selected:
                     filters[col] = selected
         
         # Apply filters
-        filtered_df = df.copy()
+        filtered_df = df_clean.copy()
         for col, values in filters.items():
             filtered_df = filtered_df[filtered_df[col].isin(values)]
         
-        # Display data sample
-        st.subheader("📊 Data Sample")
-        st.dataframe(filtered_df.head(10), use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
-        
-        # Separate columns by type
+        # Update column lists after filtering
         quantitative_cols = [col for col in filtered_df.columns if is_quantitative(filtered_df[col])]
-        qualitative_cols = [col for col in filtered_df.columns if not is_quantitative(filtered_df[col])]
+        qualitative_cols = [col for col in filtered_df.columns if is_categorical(filtered_df[col])]
         
-        # Quantitative Data Visualizations
+        # ========== QUANTITATIVE ANALYSIS ==========
         if quantitative_cols:
-            st.subheader("📈 Quantitative Data Analysis")
+            st.subheader("📊 Quantitative Variables Analysis")
             
-            # Display histograms for quantitative columns
-            for i, col in enumerate(quantitative_cols[:4]):  # Show first 4
-                if i % 2 == 0:
-                    cols = st.columns(2)
+            quant_col = st.selectbox("Select numeric column to analyze", quantitative_cols, key="quant_select")
+            
+            viz_types = st.multiselect(
+                "Select visualizations",
+                ["Histogram", "Box Plot", "Violin Plot", "Statistics"],
+                default=["Histogram"],
+                key="quant_viz"
+            )
+            
+            col1, col2 = st.columns(2)
+            
+            if "Histogram" in viz_types:
                 try:
-                    fig = plot_quantitative_column(filtered_df, col)
-                    cols[i % 2].plotly_chart(fig, use_container_width=True)
+                    fig = px.histogram(
+                        filtered_df,
+                        x=quant_col,
+                        nbins=30,
+                        title=f"Distribution of {quant_col}",
+                        marginal="box",
+                        color_discrete_sequence=["#1f77b4"]
+                    )
+                    col1.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    cols[i % 2].warning(f"Could not plot {col}: {e}")
+                    col1.error(f"Error creating histogram: {e}")
+            
+            if "Box Plot" in viz_types:
+                try:
+                    fig = px.box(filtered_df, y=quant_col, title=f"Box Plot of {quant_col}")
+                    col2.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    col2.error(f"Error creating box plot: {e}")
+            
+            if "Violin Plot" in viz_types:
+                try:
+                    fig = px.violin(filtered_df, y=quant_col, title=f"Violin Plot of {quant_col}", box=True, points="outliers")
+                    col1.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    col1.error(f"Error creating violin plot: {e}")
+            
+            if "Statistics" in viz_types:
+                col2.subheader("📊 Statistical Summary")
+                col2.dataframe(filtered_df[quant_col].describe(), use_container_width=True)
             
             st.markdown("---")
             
-            # Correlation heatmap for multiple quantitative columns
+            # Correlation analysis
             if len(quantitative_cols) > 1:
-                st.subheader("🔗 Correlation Matrix")
-                corr_matrix = filtered_df[quantitative_cols].corr()
-                fig = px.imshow(
-                    corr_matrix,
-                    labels=dict(color="Correlation"),
-                    x=quantitative_cols,
-                    y=quantitative_cols,
-                    color_continuous_scale="RdBu_r",
-                    zmin=-1,
-                    zmax=1,
-                    title="Correlation Between Numeric Columns"
+                st.subheader("🔗 Correlation Analysis")
+                
+                corr_viz = st.selectbox(
+                    "Select correlation visualization",
+                    ["Correlation Heatmap", "Correlation Matrix", "Pair Plot (first 5 columns)"],
+                    key="corr_viz"
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                
+                if corr_viz == "Correlation Heatmap":
+                    corr_matrix = filtered_df[quantitative_cols].corr()
+                    fig = px.imshow(
+                        corr_matrix,
+                        labels=dict(color="Correlation"),
+                        x=quantitative_cols,
+                        y=quantitative_cols,
+                        color_continuous_scale="RdBu_r",
+                        zmin=-1,
+                        zmax=1,
+                        title="Correlation Heatmap"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                elif corr_viz == "Correlation Matrix":
+                    st.dataframe(filtered_df[quantitative_cols].corr(), use_container_width=True)
+                
                 st.markdown("---")
-            
-            # Statistics
-            st.subheader("📊 Statistics")
-            st.dataframe(filtered_df[quantitative_cols].describe(), use_container_width=True)
-            st.markdown("---")
         
-        # Qualitative Data Visualizations
+        # ========== QUALITATIVE ANALYSIS ==========
         if qualitative_cols:
-            st.subheader("🏷️ Qualitative Data Analysis")
+            st.subheader("🏷️ Categorical Variables Analysis")
             
-            # Display bar charts for qualitative columns
-            for i, col in enumerate(qualitative_cols[:4]):  # Show first 4
-                if i % 2 == 0:
-                    cols = st.columns(2)
+            qual_col = st.selectbox("Select categorical column to analyze", qualitative_cols, key="qual_select")
+            
+            viz_types = st.multiselect(
+                "Select visualizations",
+                ["Bar Chart", "Pie Chart", "Value Counts"],
+                default=["Bar Chart"],
+                key="qual_viz"
+            )
+            
+            col1, col2 = st.columns(2)
+            
+            if "Bar Chart" in viz_types:
                 try:
-                    fig = plot_qualitative_column(filtered_df, col)
-                    cols[i % 2].plotly_chart(fig, use_container_width=True)
+                    value_counts = filtered_df[qual_col].value_counts().head(20)
+                    fig = px.bar(
+                        x=value_counts.index,
+                        y=value_counts.values,
+                        labels={"x": qual_col, "y": "Count"},
+                        title=f"Frequency of {qual_col}",
+                        color=value_counts.values,
+                        color_continuous_scale="Viridis"
+                    )
+                    col1.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    cols[i % 2].warning(f"Could not plot {col}: {e}")
+                    col1.error(f"Error creating bar chart: {e}")
+            
+            if "Pie Chart" in viz_types:
+                try:
+                    value_counts = filtered_df[qual_col].value_counts().head(10)
+                    fig = px.pie(
+                        values=value_counts.values,
+                        names=value_counts.index,
+                        title=f"Distribution of {qual_col}"
+                    )
+                    col2.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    col2.error(f"Error creating pie chart: {e}")
+            
+            if "Value Counts" in viz_types:
+                col1.subheader("📊 Value Counts")
+                value_counts = filtered_df[qual_col].value_counts()
+                col1.dataframe(value_counts, use_container_width=True)
             
             st.markdown("---")
         
-        # Combined analysis if both types exist
+        # ========== COMBINED ANALYSIS ==========
         if quantitative_cols and qualitative_cols:
-            st.subheader("🔀 Combined Analysis")
+            st.subheader("🔀 Combined Analysis (Numeric vs Categorical)")
             
-            selected_quant = st.selectbox("Select numeric column", quantitative_cols)
-            selected_qual = st.selectbox("Select categorical column", qualitative_cols)
+            selected_quant = st.selectbox("Select numeric column", quantitative_cols, key="combined_quant")
+            selected_qual = st.selectbox("Select categorical column", qualitative_cols, key="combined_qual")
             
-            if selected_quant and selected_qual:
-                fig = px.box(
-                    filtered_df,
-                    x=selected_qual,
-                    y=selected_quant,
-                    title=f"{selected_quant} by {selected_qual}",
-                    color=selected_qual
-                )
+            combined_viz = st.selectbox(
+                "Select visualization type",
+                ["Box Plot", "Violin Plot", "Scatter with Color", "Bar (Mean)"],
+                key="combined_viz"
+            )
+            
+            try:
+                if combined_viz == "Box Plot":
+                    fig = px.box(
+                        filtered_df,
+                        x=selected_qual,
+                        y=selected_quant,
+                        title=f"{selected_quant} by {selected_qual}",
+                        color=selected_qual
+                    )
+                
+                elif combined_viz == "Violin Plot":
+                    fig = px.violin(
+                        filtered_df,
+                        x=selected_qual,
+                        y=selected_quant,
+                        title=f"{selected_quant} by {selected_qual}",
+                        color=selected_qual,
+                        box=True
+                    )
+                
+                elif combined_viz == "Scatter with Color":
+                    fig = px.scatter(
+                        filtered_df,
+                        x=filtered_df.index,
+                        y=selected_quant,
+                        color=selected_qual,
+                        title=f"{selected_quant} colored by {selected_qual}",
+                        hover_data=[selected_quant, selected_qual]
+                    )
+                
+                elif combined_viz == "Bar (Mean)":
+                    mean_data = filtered_df.groupby(selected_qual)[selected_quant].mean().reset_index()
+                    fig = px.bar(
+                        mean_data,
+                        x=selected_qual,
+                        y=selected_quant,
+                        title=f"Mean {selected_quant} by {selected_qual}",
+                        color=selected_qual
+                    )
+                
                 st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error creating visualization: {e}")
 else:
     st.info("👆 Upload a CSV, Excel, or Parquet file to get started!")
