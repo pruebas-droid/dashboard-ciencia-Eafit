@@ -450,65 +450,59 @@ if uploaded_file is not None:
         
         # ========== AI ANALYSIS SECTION ==========
         st.markdown("---")
-        st.header("🤖 Section 3: AI-Powered Analysis")
+        st.header("🤖 AI Assistant Chat")
         
         if groq_client:
-            st.subheader("Ask Groq AI About Your Data")
+            # Initialize chat history in session state
+            if "chat_history" not in st.session_state:
+                st.session_state.chat_history = []
             
-            # Predefined quick analyses
-            col1, col2, col3 = st.columns(3)
+            # Display chat history
+            chat_container = st.container()
+            with chat_container:
+                for message in st.session_state.chat_history:
+                    with st.chat_message(message["role"]):
+                        st.write(message["content"])
             
-            with col1:
-                if st.button("📊 Get Data Summary"):
-                    with st.spinner("Analyzing data..."):
-                        analysis = analyze_with_groq(
-                            groq_client,
-                            filtered_df,
-                            "Provide a comprehensive summary of this dataset including key statistics, patterns, and notable features."
-                        )
-                        st.write(analysis)
-            
-            with col2:
-                if st.button("🔍 Find Anomalies"):
-                    with st.spinner("Analyzing data..."):
-                        analysis = analyze_with_groq(
-                            groq_client,
-                            filtered_df,
-                            "Identify any anomalies, outliers, or unusual patterns in this dataset. What stands out?"
-                        )
-                        st.write(analysis)
-            
-            with col3:
-                if st.button("💡 Key Insights"):
-                    with st.spinner("Analyzing data..."):
-                        analysis = analyze_with_groq(
-                            groq_client,
-                            filtered_df,
-                            "What are the most important insights and actionable recommendations from this data?"
-                        )
-                        st.write(analysis)
-            
-            st.markdown("---")
-            
-            # Custom question
-            st.subheader("🤔 Ask Your Own Question")
-            custom_question = st.text_area(
-                "What would you like to know about this data?",
-                placeholder="E.g., What are the correlations between variables? What trends do you see?",
-                height=100
+            # Chat input
+            user_input = st.chat_input(
+                "Ask me anything about your data...",
+                placeholder="E.g., What are the main patterns? Are there any correlations? What stands out?"
             )
             
-            if st.button("Analyze with Groq", key="custom_analysis"):
-                if custom_question.strip():
-                    with st.spinner("Groq is thinking..."):
-                        analysis = analyze_with_groq(groq_client, filtered_df, custom_question)
-                        st.write(analysis)
-                else:
-                    st.warning("Please enter a question first!")
+            if user_input:
+                # Add user message to history
+                st.session_state.chat_history.append({
+                    "role": "user",
+                    "content": user_input
+                })
+                
+                # Display user message
+                with st.chat_message("user"):
+                    st.write(user_input)
+                
+                # Get AI response
+                with st.chat_message("assistant"):
+                    with st.spinner("🤔 Thinking..."):
+                        response = analyze_with_groq(groq_client, filtered_df, user_input)
+                        st.write(response)
+                        
+                        # Add assistant message to history
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": response
+                        })
+                
+                # Rerun to scroll to latest message
+                st.rerun()
+            
+            # Clear chat button
+            if st.button("🗑️ Clear Chat History", key="clear_chat"):
+                st.session_state.chat_history = []
+                st.rerun()
         else:
-            st.info("💡 Connect your Groq API key in the sidebar to enable AI analysis features!")
+            st.warning("⚠️ Please enter your Groq API key in the sidebar to use the AI assistant!")
 else:
     st.info("👆 Upload a CSV, Excel, or Parquet file to get started!")
-
 
 #  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
