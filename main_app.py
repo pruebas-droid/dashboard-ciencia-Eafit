@@ -4,6 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
+from groq import Groq
 
 # Set page config
 st.set_page_config(page_title="Smart Data Dashboard", layout="wide", initial_sidebar_state="expanded")
@@ -53,9 +54,88 @@ def load_data(file):
         st.error(f"Error loading file: {e}")
         return None
 
-# Sidebar - File Upload
+def get_data_summary(df):
+    """Generate a comprehensive data summary for Groq analysis"""
+    quantitative_cols = [col for col in df.columns if is_quantitative(df[col])]
+    qualitative_cols = [col for col in df.columns if is_categorical(df[col])]
+    
+    summary = f"""
+Dataset Overview:
+- Total Rows: {df.shape[0]}
+- Total Columns: {df.shape[1]}
+- Numeric Columns: {len(quantitative_cols)}
+- Categorical Columns: {len(qualitative_cols)}
+
+Numeric Columns Statistics:
+{df[quantitative_cols].describe().to_string() if quantitative_cols else "None"}
+
+Categorical Columns:
+{', '.join([f"{col} ({df[col].nunique()} unique values)" for col in qualitative_cols]) if qualitative_cols else "None"}
+
+Data Quality:
+- Missing Values: {df.isnull().sum().sum()}
+- Duplicates: {df.duplicated().sum()}
+- Columns with Missing Data: {df.columns[df.isnull().any()].tolist()}
+
+First Few Rows:
+{df.head().to_string()}
+"""
+    return summary
+
+def analyze_with_groq(client, df, user_question):
+    """Send data summary and user question to Groq for analysis"""
+    data_summary = get_data_summary(df)
+    
+    system_prompt = """You are an expert data analyst. Analyze the provided dataset and answer the user's questions with:
+- Clear insights and patterns
+- Statistical observations
+- Recommendations based on the data
+- Any anomalies or interesting findings
+
+Be concise but comprehensive in your analysis."""
+    
+    messages = [
+        {
+            "role": "user",
+            "content": f"""{system_prompt}
+
+Dataset Information:
+{data_summary}
+
+User Question: {user_question}
+
+Please provide a detailed analysis."""
+        }
+    ]
+    
+    try:
+        response = client.chat.completions.create(
+            model="mixtral-8x7b-32768",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Error analyzing data with Groq: {str(e)}"
+
+# Sidebar - File Upload and Groq API Key
 st.sidebar.header("📁 Upload Data")
 uploaded_file = st.sidebar.file_uploader("Choose a file", type=['csv', 'xlsx', 'xls', 'parquet'])
+
+st.sidebar.header("🤖 Groq AI Assistant")
+groq_api_key = st.sidebar.text_input("Enter your Groq API Key", type="password", placeholder="gsk_...")
+
+# Initialize Groq client if API key provided
+groq_client = None
+if groq_api_key:
+    try:
+        groq_client = Groq(api_key=groq_api_key)
+        st.sidebar.success("✅ Groq connected!")
+    except Exception as e:
+        st.sidebar.error(f"❌ Error connecting to Groq: {e}")
+else:
+    st.sidebar.info("Provide your Groq API key to enable AI analysis")
 
 if uploaded_file is not None:
     # Load data
@@ -367,5 +447,68 @@ if uploaded_file is not None:
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"Error creating visualization: {e}")
+        
+        # ========== AI ANALYSIS SECTION ==========
+        st.markdown("---")
+        st.header("🤖 Section 3: AI-Powered Analysis")
+        
+        if groq_client:
+            st.subheader("Ask Groq AI About Your Data")
+            
+            # Predefined quick analyses
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("📊 Get Data Summary"):
+                    with st.spinner("Analyzing data..."):
+                        analysis = analyze_with_groq(
+                            groq_client,
+                            filtered_df,
+                            "Provide a comprehensive summary of this dataset including key statistics, patterns, and notable features."
+                        )
+                        st.write(analysis)
+            
+            with col2:
+                if st.button("🔍 Find Anomalies"):
+                    with st.spinner("Analyzing data..."):
+                        analysis = analyze_with_groq(
+                            groq_client,
+                            filtered_df,
+                            "Identify any anomalies, outliers, or unusual patterns in this dataset. What stands out?"
+                        )
+                        st.write(analysis)
+            
+            with col3:
+                if st.button("💡 Key Insights"):
+                    with st.spinner("Analyzing data..."):
+                        analysis = analyze_with_groq(
+                            groq_client,
+                            filtered_df,
+                            "What are the most important insights and actionable recommendations from this data?"
+                        )
+                        st.write(analysis)
+            
+            st.markdown("---")
+            
+            # Custom question
+            st.subheader("🤔 Ask Your Own Question")
+            custom_question = st.text_area(
+                "What would you like to know about this data?",
+                placeholder="E.g., What are the correlations between variables? What trends do you see?",
+                height=100
+            )
+            
+            if st.button("Analyze with Groq", key="custom_analysis"):
+                if custom_question.strip():
+                    with st.spinner("Groq is thinking..."):
+                        analysis = analyze_with_groq(groq_client, filtered_df, custom_question)
+                        st.write(analysis)
+                else:
+                    st.warning("Please enter a question first!")
+        else:
+            st.info("💡 Connect your Groq API key in the sidebar to enable AI analysis features!")
 else:
     st.info("👆 Upload a CSV, Excel, or Parquet file to get started!")
+
+
+#  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
