@@ -3,506 +3,492 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from io import BytesIO
+from plotly.subplots import make_subplots
+import seaborn as sns
+import matplotlib.pyplot as plt
+from io import StringIO
 from groq import Groq
+import io
 
-# Set page config
-st.set_page_config(page_title="Smart Data Dashboard", layout="wide", initial_sidebar_state="expanded")
+# Page configuration
+st.set_page_config(
+    page_title="Data Analysis Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS
+st.markdown("""
+    <style>
+    .main {
+        padding-top: 2rem;
+    }
+    .stTabs [role="tab"] {
+        font-size: 1.1em;
+        font-weight: 600;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # Title
-st.title("📊 Smart Data Dashboard")
-st.markdown("Upload CSV, Excel, or other data files for automatic analysis and visualization")
-st.markdown("---")
+st.title("📊 Data Analysis Dashboard with LLM Insights")
 
-def is_quantitative(series):
-    """Determine if a series is quantitative (numerical) or qualitative (categorical)"""
-    if pd.api.types.is_numeric_dtype(series):
-        return True
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return True
-    return False
+# Sidebar - File upload and Groq API key
+st.sidebar.header("⚙️ Configuration")
 
-def is_categorical(series):
-    """Determine if a series is categorical"""
-    return not is_quantitative(series)
+# File upload
+uploaded_file = st.sidebar.file_uploader(
+    "Upload your dataset (CSV, Excel, JSON, Parquet)",
+    type=["csv", "xlsx", "xls", "json", "parquet"]
+)
 
-def clean_data(df):
-    """Clean data: handle NA, spaces, duplicates, etc."""
-    df_clean = df.copy()
-    
-    # Replace spaces with NaN for string columns
-    for col in df_clean.columns:
-        if df_clean[col].dtype == 'object':
-            df_clean[col] = df_clean[col].replace(r'^\s*$', np.nan, regex=True)
-            df_clean[col] = df_clean[col].str.strip() if df_clean[col].dtype == 'object' else df_clean[col]
-    
-    return df_clean
+# Groq API Key
+groq_api_key = st.sidebar.text_input(
+    "Enter your Groq API Key (optional for LLM insights)",
+    type="password",
+    help="Get your API key from https://console.groq.com"
+)
 
-def load_data(file):
-    """Load data from uploaded file"""
-    try:
-        if file.name.endswith('.csv'):
-            return pd.read_csv(file)
-        elif file.name.endswith(('.xlsx', '.xls')):
-            return pd.read_excel(file)
-        elif file.name.endswith('.parquet'):
-            return pd.read_parquet(file)
-        else:
-            st.error("Unsupported file format. Please use CSV, Excel, or Parquet.")
-            return None
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
-        return None
+# Initialize session state for data
+if "df" not in st.session_state:
+    st.session_state.df = None
+if "df_cleaned" not in st.session_state:
+    st.session_state.df_cleaned = None
 
-def get_data_summary(df):
-    """Generate a comprehensive data summary for Groq analysis"""
-    quantitative_cols = [col for col in df.columns if is_quantitative(df[col])]
-    qualitative_cols = [col for col in df.columns if is_categorical(df[col])]
-    
-    summary = f"""
-Dataset Overview:
-- Total Rows: {df.shape[0]}
-- Total Columns: {df.shape[1]}
-- Numeric Columns: {len(quantitative_cols)}
-- Categorical Columns: {len(qualitative_cols)}
-
-Numeric Columns Statistics:
-{df[quantitative_cols].describe().to_string() if quantitative_cols else "None"}
-
-Categorical Columns:
-{', '.join([f"{col} ({df[col].nunique()} unique values)" for col in qualitative_cols]) if qualitative_cols else "None"}
-
-Data Quality:
-- Missing Values: {df.isnull().sum().sum()}
-- Duplicates: {df.duplicated().sum()}
-- Columns with Missing Data: {df.columns[df.isnull().any()].tolist()}
-
-First Few Rows:
-{df.head().to_string()}
-"""
-    return summary
-
-def analyze_with_groq(client, df, user_question):
-    """Send data summary and user question to Groq for analysis"""
-    data_summary = get_data_summary(df)
-    
-    system_prompt = """You are an expert data analyst. Analyze the provided dataset and answer the user's questions with:
-- Clear insights and patterns
-- Statistical observations
-- Recommendations based on the data
-- Any anomalies or interesting findings
-
-Be concise but comprehensive in your analysis."""
-    
-    messages = [
-        {
-            "role": "user",
-            "content": f"""{system_prompt}
-
-Dataset Information:
-{data_summary}
-
-User Question: {user_question}
-
-Please provide a detailed analysis."""
-        }
-    ]
-    
-    try:
-        response = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=1500
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"Error analyzing data with Groq: {str(e)}"
-
-# Sidebar - File Upload and Groq API Key
-st.sidebar.header("📁 Upload Data")
-uploaded_file = st.sidebar.file_uploader("Choose a file", type=['csv', 'xlsx', 'xls', 'parquet'])
-
-st.sidebar.header("🤖 Groq AI Assistant")
-groq_api_key = st.sidebar.text_input("Enter your Groq API Key", type="password", placeholder="gsk_...")
-
-# Initialize Groq client if API key provided
-groq_client = None
-if groq_api_key:
-    try:
-        groq_client = Groq(api_key=groq_api_key)
-        st.sidebar.success("✅ Groq connected!")
-    except Exception as e:
-        st.sidebar.error(f"❌ Error connecting to Groq: {e}")
-else:
-    st.sidebar.info("Provide your Groq API key to enable AI analysis")
-
+# Load data
 if uploaded_file is not None:
-    # Load data
-    df = load_data(uploaded_file)
+    try:
+        if uploaded_file.name.endswith('.csv'):
+            st.session_state.df = pd.read_csv(uploaded_file)
+        elif uploaded_file.name.endswith(('.xlsx', '.xls')):
+            st.session_state.df = pd.read_excel(uploaded_file)
+        elif uploaded_file.name.endswith('.json'):
+            st.session_state.df = pd.read_json(uploaded_file)
+        elif uploaded_file.name.endswith('.parquet'):
+            st.session_state.df = pd.read_parquet(uploaded_file)
+        
+        st.sidebar.success(f"✅ File loaded successfully!")
+        st.sidebar.info(f"Shape: {st.session_state.df.shape}")
+    except Exception as e:
+        st.sidebar.error(f"❌ Error loading file: {str(e)}")
+
+# Main content
+if st.session_state.df is not None:
+    # Create tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📋 Data Preview",
+        "🧹 Data Cleaning",
+        "📈 Quantitative EDA",
+        "📊 Qualitative EDA",
+        "🤖 LLM Insights"
+    ])
     
-    if df is not None:
-        st.sidebar.success("✅ File loaded successfully!")
+    # Tab 1: Data Preview
+    with tab1:
+        st.header("📋 Data Preview & Info")
         
-        # ============================================
-        # SECTION 1: DATA CLEANING
-        # ============================================
-        st.header("🧹 Section 1: Data Cleaning")
-        
-        # Show original data info
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Original Data")
-            st.metric("Rows", f"{df.shape[0]:,}")
-            st.metric("Columns", f"{df.shape[1]}")
-            st.metric("Missing Values", f"{df.isnull().sum().sum():,}")
-            st.metric("Duplicates", f"{df.duplicated().sum():,}")
+            st.subheader("Dataset Info")
+            st.write(f"**Shape:** {st.session_state.df.shape[0]} rows × {st.session_state.df.shape[1]} columns")
+            st.write(f"**Memory Usage:** {st.session_state.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+            
+            st.subheader("Data Types")
+            dtype_df = st.session_state.df.dtypes.astype(str).reset_index()
+            dtype_df.columns = ['Column', 'Type']
+            st.dataframe(dtype_df, use_container_width=True)
         
-        # Clean data
-        df_clean = clean_data(df)
+        with col2:
+            st.subheader("Missing Values")
+            missing_df = pd.DataFrame({
+                'Column': st.session_state.df.columns,
+                'Missing': st.session_state.df.isnull().sum(),
+                'Percentage': (st.session_state.df.isnull().sum() / len(st.session_state.df) * 100).round(2)
+            })
+            missing_df = missing_df[missing_df['Missing'] > 0].sort_values('Missing', ascending=False)
+            
+            if len(missing_df) > 0:
+                st.dataframe(missing_df, use_container_width=True)
+            else:
+                st.success("✅ No missing values found!")
         
-        # Show cleaning options
-        st.subheader("🛠️ Cleaning Options")
+        st.subheader("First 10 Rows")
+        st.dataframe(st.session_state.df.head(10), use_container_width=True)
+    
+    # Tab 2: Data Cleaning
+    with tab2:
+        st.header("🧹 Data Cleaning")
+        
+        # Initialize cleaned dataframe
+        if st.session_state.df_cleaned is None:
+            st.session_state.df_cleaned = st.session_state.df.copy()
         
         col1, col2, col3 = st.columns(3)
         
-        remove_duplicates = col1.checkbox("Remove Duplicates", value=True)
-        remove_na = col2.checkbox("Remove Rows with NA", value=False)
-        fill_na_strategy = col3.selectbox("Fill NA Strategy", ["Keep", "Drop Column", "Forward Fill", "Backward Fill", "Mean (numeric only)"])
-        
-        # Apply selected cleaning
-        if remove_duplicates:
-            df_clean = df_clean.drop_duplicates()
-        
-        if fill_na_strategy == "Drop Column":
-            df_clean = df_clean.dropna(axis=1, how='all')
-        elif fill_na_strategy == "Forward Fill":
-            df_clean = df_clean.fillna(method='ffill')
-        elif fill_na_strategy == "Backward Fill":
-            df_clean = df_clean.fillna(method='bfill')
-        elif fill_na_strategy == "Mean (numeric only)":
-            numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
-            df_clean[numeric_cols] = df_clean[numeric_cols].fillna(df_clean[numeric_cols].mean())
-        
-        if remove_na:
-            df_clean = df_clean.dropna()
-        
-        # Show cleaned data info
-        with col2:
-            st.subheader("Cleaned Data")
-            st.metric("Rows", f"{df_clean.shape[0]:,}")
-            st.metric("Columns", f"{df_clean.shape[1]}")
-            st.metric("Missing Values", f"{df_clean.isnull().sum().sum():,}")
-            st.metric("Duplicates", f"{df_clean.duplicated().sum():,}")
-        
-        # Show data quality report
-        st.subheader("📊 Data Quality Report")
-        quality_data = []
-        for col in df_clean.columns:
-            quality_data.append({
-                "Column": col,
-                "Type": str(df_clean[col].dtype),
-                "Non-Null %": f"{(1 - df_clean[col].isnull().sum() / len(df_clean)) * 100:.1f}%",
-                "Unique Values": df_clean[col].nunique()
-            })
-        
-        st.dataframe(pd.DataFrame(quality_data), use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
-        
-        # Display cleaned data sample
-        st.subheader("📋 Cleaned Data Sample")
-        st.dataframe(df_clean.head(10), use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
-        
-        # ============================================
-        # SECTION 2: EXPLORATORY DATA ANALYSIS (EDA)
-        # ============================================
-        st.header("📈 Section 2: Exploratory Data Analysis")
-        
-        # Separate columns by type
-        quantitative_cols = [col for col in df_clean.columns if is_quantitative(df_clean[col])]
-        qualitative_cols = [col for col in df_clean.columns if is_categorical(df_clean[col])]
-        
-        st.subheader("📊 Data Overview")
-        col1, col2, col3, col4 = st.columns(4)
-        
         with col1:
-            st.metric("Total Rows", f"{df_clean.shape[0]:,}")
+            if st.button("🗑️ Remove Duplicates"):
+                initial_shape = st.session_state.df_cleaned.shape
+                st.session_state.df_cleaned = st.session_state.df_cleaned.drop_duplicates()
+                st.success(f"Removed {initial_shape[0] - st.session_state.df_cleaned.shape[0]} duplicate rows!")
+                st.rerun()
+        
         with col2:
-            st.metric("Total Columns", f"{df_clean.shape[1]}")
+            if st.button("✂️ Drop Columns with >50% Missing"):
+                cols_to_drop = st.session_state.df_cleaned.columns[
+                    st.session_state.df_cleaned.isnull().sum() / len(st.session_state.df_cleaned) > 0.5
+                ]
+                st.session_state.df_cleaned = st.session_state.df_cleaned.drop(columns=cols_to_drop)
+                if len(cols_to_drop) > 0:
+                    st.success(f"Dropped {len(cols_to_drop)} columns: {', '.join(cols_to_drop)}")
+                    st.rerun()
+                else:
+                    st.info("No columns with >50% missing values found.")
+        
         with col3:
-            st.metric("Numeric Columns", len(quantitative_cols))
-        with col4:
-            st.metric("Categorical Columns", len(qualitative_cols))
+            if st.button("🔄 Fill Numeric Missing (Mean)"):
+                numeric_cols = st.session_state.df_cleaned.select_dtypes(include=[np.number]).columns
+                for col in numeric_cols:
+                    if st.session_state.df_cleaned[col].isnull().sum() > 0:
+                        st.session_state.df_cleaned[col].fillna(
+                            st.session_state.df_cleaned[col].mean(), inplace=True
+                        )
+                st.success("Filled numeric missing values with mean!")
+                st.rerun()
         
-        st.markdown("---")
+        # Manual column selection and operations
+        st.subheader("Manual Cleaning Operations")
         
-        # Sidebar filters for EDA
-        st.sidebar.header("🔍 EDA Filters")
+        cleaning_option = st.selectbox(
+            "Select cleaning operation:",
+            ["None", "Remove Outliers (IQR)", "Remove Columns", "Fill Missing Values"]
+        )
         
-        filters = {}
-        for col in qualitative_cols[:5]:
-            unique_values = df_clean[col].unique()
-            if len(unique_values) <= 50:
-                selected = st.sidebar.multiselect(
-                    f"Filter by {col}",
-                    options=sorted([str(v) for v in unique_values]),
-                    default=[str(v) for v in unique_values]
-                )
-                if selected:
-                    filters[col] = selected
+        if cleaning_option == "Remove Outliers (IQR)":
+            numeric_cols = st.session_state.df_cleaned.select_dtypes(include=[np.number]).columns.tolist()
+            if numeric_cols:
+                col_to_clean = st.selectbox("Select numeric column:", numeric_cols)
+                if st.button("Remove Outliers"):
+                    Q1 = st.session_state.df_cleaned[col_to_clean].quantile(0.25)
+                    Q3 = st.session_state.df_cleaned[col_to_clean].quantile(0.75)
+                    IQR = Q3 - Q1
+                    initial_len = len(st.session_state.df_cleaned)
+                    st.session_state.df_cleaned = st.session_state.df_cleaned[
+                        (st.session_state.df_cleaned[col_to_clean] >= Q1 - 1.5 * IQR) &
+                        (st.session_state.df_cleaned[col_to_clean] <= Q3 + 1.5 * IQR)
+                    ]
+                    st.success(f"Removed {initial_len - len(st.session_state.df_cleaned)} outliers!")
+                    st.rerun()
         
-        # Apply filters
-        filtered_df = df_clean.copy()
-        for col, values in filters.items():
-            filtered_df = filtered_df[filtered_df[col].isin(values)]
+        elif cleaning_option == "Remove Columns":
+            cols_to_remove = st.multiselect("Select columns to remove:", st.session_state.df_cleaned.columns)
+            if st.button("Remove Selected Columns"):
+                st.session_state.df_cleaned = st.session_state.df_cleaned.drop(columns=cols_to_remove)
+                st.success(f"Removed {len(cols_to_remove)} columns!")
+                st.rerun()
         
-        # Update column lists after filtering
-        quantitative_cols = [col for col in filtered_df.columns if is_quantitative(filtered_df[col])]
-        qualitative_cols = [col for col in filtered_df.columns if is_categorical(filtered_df[col])]
+        elif cleaning_option == "Fill Missing Values":
+            cols_with_missing = st.session_state.df_cleaned.columns[
+                st.session_state.df_cleaned.isnull().sum() > 0
+            ].tolist()
+            if cols_with_missing:
+                col_to_fill = st.selectbox("Select column to fill:", cols_with_missing)
+                fill_method = st.radio("Fill method:", ["Forward Fill", "Backward Fill", "Mean", "Median", "Drop"])
+                if st.button("Apply Fill"):
+                    if fill_method == "Forward Fill":
+                        st.session_state.df_cleaned[col_to_fill].fillna(method='ffill', inplace=True)
+                    elif fill_method == "Backward Fill":
+                        st.session_state.df_cleaned[col_to_fill].fillna(method='bfill', inplace=True)
+                    elif fill_method == "Mean":
+                        st.session_state.df_cleaned[col_to_fill].fillna(
+                            st.session_state.df_cleaned[col_to_fill].mean(), inplace=True
+                        )
+                    elif fill_method == "Median":
+                        st.session_state.df_cleaned[col_to_fill].fillna(
+                            st.session_state.df_cleaned[col_to_fill].median(), inplace=True
+                        )
+                    elif fill_method == "Drop":
+                        st.session_state.df_cleaned = st.session_state.df_cleaned.dropna(subset=[col_to_fill])
+                    st.success(f"Filled missing values using {fill_method}!")
+                    st.rerun()
         
-        # ========== QUANTITATIVE ANALYSIS ==========
-        if quantitative_cols:
-            st.subheader("📊 Quantitative Variables Analysis")
+        st.subheader("Cleaned Data Summary")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**Current Shape:** {st.session_state.df_cleaned.shape}")
+            st.write(f"**Missing Values:** {st.session_state.df_cleaned.isnull().sum().sum()}")
+        with col2:
+            st.write(f"**Duplicates:** {st.session_state.df_cleaned.duplicated().sum()}")
+        
+        st.dataframe(st.session_state.df_cleaned.head(), use_container_width=True)
+    
+    # Tab 3: Quantitative EDA
+    with tab3:
+        st.header("📈 Quantitative EDA")
+        
+        df_analysis = st.session_state.df_cleaned if st.session_state.df_cleaned is not None else st.session_state.df
+        numeric_cols = df_analysis.select_dtypes(include=[np.number]).columns.tolist()
+        
+        if numeric_cols:
+            # Summary Statistics
+            st.subheader("Summary Statistics")
+            st.dataframe(df_analysis[numeric_cols].describe().T, use_container_width=True)
             
-            quant_col = st.selectbox("Select numeric column to analyze", quantitative_cols, key="quant_select")
-            
-            viz_types = st.multiselect(
-                "Select visualizations",
-                ["Histogram", "Box Plot", "Violin Plot", "Statistics"],
-                default=["Histogram"],
-                key="quant_viz"
-            )
-            
+            # Visualizations
             col1, col2 = st.columns(2)
             
-            if "Histogram" in viz_types:
-                try:
-                    fig = px.histogram(
-                        filtered_df,
-                        x=quant_col,
-                        nbins=30,
-                        title=f"Distribution of {quant_col}",
-                        marginal="box",
-                        color_discrete_sequence=["#1f77b4"]
-                    )
-                    col1.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    col1.error(f"Error creating histogram: {e}")
-            
-            if "Box Plot" in viz_types:
-                try:
-                    fig = px.box(filtered_df, y=quant_col, title=f"Box Plot of {quant_col}")
-                    col2.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    col2.error(f"Error creating box plot: {e}")
-            
-            if "Violin Plot" in viz_types:
-                try:
-                    fig = px.violin(filtered_df, y=quant_col, title=f"Violin Plot of {quant_col}", box=True, points="outliers")
-                    col1.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    col1.error(f"Error creating violin plot: {e}")
-            
-            if "Statistics" in viz_types:
-                col2.subheader("📊 Statistical Summary")
-                col2.dataframe(filtered_df[quant_col].describe(), use_container_width=True)
-            
-            st.markdown("---")
-            
-            # Correlation analysis
-            if len(quantitative_cols) > 1:
-                st.subheader("🔗 Correlation Analysis")
-                
-                corr_viz = st.selectbox(
-                    "Select correlation visualization",
-                    ["Correlation Heatmap", "Correlation Matrix", "Pair Plot (first 5 columns)"],
-                    key="corr_viz"
-                )
-                
-                if corr_viz == "Correlation Heatmap":
-                    corr_matrix = filtered_df[quantitative_cols].corr()
-                    fig = px.imshow(
-                        corr_matrix,
-                        labels=dict(color="Correlation"),
-                        x=quantitative_cols,
-                        y=quantitative_cols,
-                        color_continuous_scale="RdBu_r",
-                        zmin=-1,
-                        zmax=1,
-                        title="Correlation Heatmap"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                elif corr_viz == "Correlation Matrix":
-                    st.dataframe(filtered_df[quantitative_cols].corr(), use_container_width=True)
-                
-                st.markdown("---")
-        
-        # ========== QUALITATIVE ANALYSIS ==========
-        if qualitative_cols:
-            st.subheader("🏷️ Categorical Variables Analysis")
-            
-            qual_col = st.selectbox("Select categorical column to analyze", qualitative_cols, key="qual_select")
-            
-            viz_types = st.multiselect(
-                "Select visualizations",
-                ["Bar Chart", "Pie Chart", "Value Counts"],
-                default=["Bar Chart"],
-                key="qual_viz"
-            )
-            
-            col1, col2 = st.columns(2)
-            
-            if "Bar Chart" in viz_types:
-                try:
-                    value_counts = filtered_df[qual_col].value_counts().head(20)
-                    fig = px.bar(
-                        x=value_counts.index,
-                        y=value_counts.values,
-                        labels={"x": qual_col, "y": "Count"},
-                        title=f"Frequency of {qual_col}",
-                        color=value_counts.values,
-                        color_continuous_scale="Viridis"
-                    )
-                    col1.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    col1.error(f"Error creating bar chart: {e}")
-            
-            if "Pie Chart" in viz_types:
-                try:
-                    value_counts = filtered_df[qual_col].value_counts().head(10)
-                    fig = px.pie(
-                        values=value_counts.values,
-                        names=value_counts.index,
-                        title=f"Distribution of {qual_col}"
-                    )
-                    col2.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    col2.error(f"Error creating pie chart: {e}")
-            
-            if "Value Counts" in viz_types:
-                col1.subheader("📊 Value Counts")
-                value_counts = filtered_df[qual_col].value_counts()
-                col1.dataframe(value_counts, use_container_width=True)
-            
-            st.markdown("---")
-        
-        # ========== COMBINED ANALYSIS ==========
-        if quantitative_cols and qualitative_cols:
-            st.subheader("🔀 Combined Analysis (Numeric vs Categorical)")
-            
-            selected_quant = st.selectbox("Select numeric column", quantitative_cols, key="combined_quant")
-            selected_qual = st.selectbox("Select categorical column", qualitative_cols, key="combined_qual")
-            
-            combined_viz = st.selectbox(
-                "Select visualization type",
-                ["Box Plot", "Violin Plot", "Scatter with Color", "Bar (Mean)"],
-                key="combined_viz"
-            )
-            
-            try:
-                if combined_viz == "Box Plot":
-                    fig = px.box(
-                        filtered_df,
-                        x=selected_qual,
-                        y=selected_quant,
-                        title=f"{selected_quant} by {selected_qual}",
-                        color=selected_qual
-                    )
-                
-                elif combined_viz == "Violin Plot":
-                    fig = px.violin(
-                        filtered_df,
-                        x=selected_qual,
-                        y=selected_quant,
-                        title=f"{selected_quant} by {selected_qual}",
-                        color=selected_qual,
-                        box=True
-                    )
-                
-                elif combined_viz == "Scatter with Color":
-                    fig = px.scatter(
-                        filtered_df,
-                        x=filtered_df.index,
-                        y=selected_quant,
-                        color=selected_qual,
-                        title=f"{selected_quant} colored by {selected_qual}",
-                        hover_data=[selected_quant, selected_qual]
-                    )
-                
-                elif combined_viz == "Bar (Mean)":
-                    mean_data = filtered_df.groupby(selected_qual)[selected_quant].mean().reset_index()
-                    fig = px.bar(
-                        mean_data,
-                        x=selected_qual,
-                        y=selected_quant,
-                        title=f"Mean {selected_quant} by {selected_qual}",
-                        color=selected_qual
-                    )
-                
+            with col1:
+                st.subheader("Distribution of Numeric Columns")
+                selected_col = st.selectbox("Select column for histogram:", numeric_cols, key="hist")
+                fig = px.histogram(df_analysis, x=selected_col, nbins=30, 
+                                  title=f"Distribution of {selected_col}",
+                                  color_discrete_sequence=['#1f77b4'])
+                fig.update_layout(height=400)
                 st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error creating visualization: {e}")
-        
-        # ========== AI ANALYSIS SECTION ==========
-        st.markdown("---")
-        st.header("🤖 AI Assistant Chat")
-        
-        if groq_client:
-            # Initialize chat history in session state
-            if "chat_history" not in st.session_state:
-                st.session_state.chat_history = []
             
-            # Display chat history
-            chat_container = st.container()
-            with chat_container:
-                for message in st.session_state.chat_history:
-                    with st.chat_message(message["role"]):
-                        st.write(message["content"])
+            with col2:
+                st.subheader("Box Plots")
+                fig = go.Figure()
+                for col in numeric_cols[:5]:  # Limit to 5 columns for clarity
+                    fig.add_trace(go.Box(y=df_analysis[col], name=col))
+                fig.update_layout(height=400, showlegend=True)
+                st.plotly_chart(fig, use_container_width=True)
             
-            # Chat input
-            user_input = st.chat_input(
-                "Ask me anything about your data...",
-                placeholder="E.g., What are the main patterns? Are there any correlations? What stands out?"
-            )
-            
-            if user_input:
-                # Add user message to history
-                st.session_state.chat_history.append({
-                    "role": "user",
-                    "content": user_input
-                })
+            # Correlation Matrix
+            st.subheader("Correlation Matrix")
+            if len(numeric_cols) > 1:
+                corr_matrix = df_analysis[numeric_cols].corr()
+                fig = px.imshow(corr_matrix, 
+                               text_auto=True,
+                               color_continuous_scale='RdBu_r',
+                               zmin=-1, zmax=1,
+                               title="Correlation Matrix")
+                fig.update_layout(height=600, width=600)
+                st.plotly_chart(fig, use_container_width=True)
                 
-                # Display user message
-                with st.chat_message("user"):
-                    st.write(user_input)
+                # High correlations
+                st.subheader("High Correlations (> 0.7 or < -0.7)")
+                high_corr = []
+                for i in range(len(corr_matrix.columns)):
+                    for j in range(i+1, len(corr_matrix.columns)):
+                        if abs(corr_matrix.iloc[i, j]) > 0.7:
+                            high_corr.append({
+                                'Variable 1': corr_matrix.columns[i],
+                                'Variable 2': corr_matrix.columns[j],
+                                'Correlation': round(corr_matrix.iloc[i, j], 3)
+                            })
                 
-                # Get AI response
-                with st.chat_message("assistant"):
-                    with st.spinner("🤔 Thinking..."):
-                        response = analyze_with_groq(groq_client, filtered_df, user_input)
-                        st.write(response)
-                        
-                        # Add assistant message to history
-                        st.session_state.chat_history.append({
-                            "role": "assistant",
-                            "content": response
-                        })
-                
-                # Rerun to scroll to latest message
-                st.rerun()
+                if high_corr:
+                    st.dataframe(pd.DataFrame(high_corr), use_container_width=True)
+                else:
+                    st.info("No high correlations found.")
             
-            # Clear chat button
-            if st.button("🗑️ Clear Chat History", key="clear_chat"):
-                st.session_state.chat_history = []
-                st.rerun()
+            # Scatter plots for top correlations
+            st.subheader("Scatter Plots")
+            if len(numeric_cols) > 1:
+                col1_scatter = st.selectbox("X-axis:", numeric_cols, key="x_scatter")
+                col2_scatter = st.selectbox("Y-axis:", numeric_cols, key="y_scatter")
+                fig = px.scatter(df_analysis, x=col1_scatter, y=col2_scatter,
+                               title=f"{col1_scatter} vs {col2_scatter}",
+                               trendline="ols", trendline_color_override="red")
+                st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning("⚠️ Please enter your Groq API key in the sidebar to use the AI assistant!")
+            st.warning("⚠️ No numeric columns found in the dataset.")
+    
+    # Tab 4: Qualitative EDA
+    with tab4:
+        st.header("📊 Qualitative EDA")
+        
+        df_analysis = st.session_state.df_cleaned if st.session_state.df_cleaned is not None else st.session_state.df
+        categorical_cols = df_analysis.select_dtypes(include=['object']).columns.tolist()
+        
+        if categorical_cols:
+            # Value Counts
+            st.subheader("Categorical Distribution")
+            
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                selected_cat = st.selectbox("Select categorical column:", categorical_cols)
+            
+            with col2:
+                chart_type = st.radio("Chart type:", ["Bar Chart", "Pie Chart", "Donut Chart"], horizontal=True)
+            
+            value_counts = df_analysis[selected_cat].value_counts().head(10)
+            
+            if chart_type == "Bar Chart":
+                fig = px.bar(value_counts, 
+                           title=f"Distribution of {selected_cat}",
+                           labels={'index': selected_cat, 'value': 'Count'},
+                           color_discrete_sequence=['#636EFA'])
+            elif chart_type == "Pie Chart":
+                fig = px.pie(values=value_counts.values, names=value_counts.index,
+                           title=f"Distribution of {selected_cat}")
+            else:  # Donut Chart
+                fig = px.pie(values=value_counts.values, names=value_counts.index,
+                           title=f"Distribution of {selected_cat}",
+                           hole=0.3)
+            
+            fig.update_layout(height=500)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Multiple categorical columns
+            st.subheader("Multiple Categories View")
+            cols_to_show = st.multiselect("Select columns to display:", categorical_cols, 
+                                         default=categorical_cols[:3])
+            
+            for col in cols_to_show:
+                st.write(f"**{col}**")
+                val_counts = df_analysis[col].value_counts().head(10)
+                fig = px.bar(val_counts, 
+                           labels={'index': col, 'value': 'Count'},
+                           height=300,
+                           color_discrete_sequence=['#EF553B'])
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Unique values summary
+            st.subheader("Unique Values Summary")
+            unique_summary = pd.DataFrame({
+                'Column': categorical_cols,
+                'Unique Values': [df_analysis[col].nunique() for col in categorical_cols],
+                'Most Common': [df_analysis[col].mode()[0] if len(df_analysis[col].mode()) > 0 else 'N/A' 
+                               for col in categorical_cols]
+            })
+            st.dataframe(unique_summary, use_container_width=True)
+        else:
+            st.warning("⚠️ No categorical columns found in the dataset.")
+    
+    # Tab 5: LLM Insights
+    with tab5:
+        st.header("🤖 LLM Insights with Groq")
+        
+        if not groq_api_key:
+            st.warning("⚠️ Please provide your Groq API key in the sidebar to use LLM insights.")
+            st.info("Get your API key from: https://console.groq.com")
+        else:
+            try:
+                client = Groq(api_key=groq_api_key)
+                
+                df_analysis = st.session_state.df_cleaned if st.session_state.df_cleaned is not None else st.session_state.df
+                
+                # Prepare data summary for LLM
+                data_summary = f"""
+                Dataset Overview:
+                - Shape: {df_analysis.shape}
+                - Columns: {', '.join(df_analysis.columns)}
+                - Data Types: {df_analysis.dtypes.to_dict()}
+                - Missing Values: {df_analysis.isnull().sum().to_dict()}
+                
+                Statistical Summary:
+                {df_analysis.describe().to_string()}
+                
+                First few rows:
+                {df_analysis.head(10).to_string()}
+                """
+                
+                # Query options
+                query_type = st.radio("Select insight type:", 
+                                     ["General Insights", "Anomalies & Patterns", 
+                                      "Data Quality", "Business Recommendations",
+                                      "Custom Query"], 
+                                     horizontal=True)
+                
+                if query_type == "General Insights":
+                    prompt = f"""Analyze this dataset and provide key insights about the data distribution, 
+                    relationships, and important statistics:\n\n{data_summary}"""
+                
+                elif query_type == "Anomalies & Patterns":
+                    prompt = f"""Identify any anomalies, patterns, outliers, or unusual trends in this dataset:
+                    \n\n{data_summary}"""
+                
+                elif query_type == "Data Quality":
+                    prompt = f"""Evaluate the data quality of this dataset. Comment on missing values, 
+                    duplicates, inconsistencies, and provide recommendations for improvement:\n\n{data_summary}"""
+                
+                elif query_type == "Business Recommendations":
+                    prompt = f"""Based on this dataset, provide business insights and actionable recommendations:
+                    \n\n{data_summary}"""
+                
+                else:  # Custom Query
+                    custom_query = st.text_area("Enter your custom query about the data:", height=100)
+                    prompt = f"""{custom_query}\n\nDataset Context:\n{data_summary}"""
+                
+                # Generate insights button
+                if st.button("🔍 Generate Insights", key="generate_insights"):
+                    with st.spinner("🤖 Groq is analyzing your data..."):
+                        try:
+                            response = client.messages.create(
+                                model="mixtral-8x7b-32768",
+                                max_tokens=2000,
+                                messages=[
+                                    {
+                                        "role": "user",
+                                        "content": prompt
+                                    }
+                                ]
+                            )
+                            
+                            insights = response.content[0].text
+                            
+                            st.subheader("💡 Insights & Analysis")
+                            st.markdown(insights)
+                            
+                            # Export insights
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button("📋 Copy to Clipboard"):
+                                    st.info("Insights copied! (Use system copy function)")
+                            with col2:
+                                if st.button("📄 Download as Text"):
+                                    st.download_button(
+                                        label="Download Insights",
+                                        data=insights,
+                                        file_name="data_insights.txt",
+                                        mime="text/plain"
+                                    )
+                        
+                        except Exception as e:
+                            st.error(f"❌ Error generating insights: {str(e)}")
+                
+                # Suggestions section
+                st.divider()
+                st.subheader("📊 Quick Analysis Suggestions")
+                
+                numeric_cols = df_analysis.select_dtypes(include=[np.number]).columns.tolist()
+                categorical_cols = df_analysis.select_dtypes(include=['object']).columns.tolist()
+                
+                if numeric_cols:
+                    st.markdown(f"**Numeric Columns:** {', '.join(numeric_cols)}")
+                if categorical_cols:
+                    st.markdown(f"**Categorical Columns:** {', '.join(categorical_cols)}")
+                
+                st.markdown("💡 Try asking about correlations, distributions, or specific column relationships!")
+            
+            except Exception as e:
+                st.error(f"❌ Groq API Error: {str(e)}")
+                st.info("Make sure your API key is valid and you have sufficient credits.")
 else:
-    st.info("👆 Upload a CSV, Excel, or Parquet file to get started!")
-
-#  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
+    # Welcome message when no file is uploaded
+    st.info("👈 Please upload a dataset from the sidebar to get started!")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("### 📋 Data Preview")
+        st.markdown("View your dataset structure, info, and first rows")
+    with col2:
+        st.markdown("### 🧹 Data Cleaning")
+        st.markdown("Clean your data with automated and manual operations")
+    with col3:
+        st.markdown("### 📈 Quantitative EDA")
+        st.markdown("Statistical analysis and numeric visualizations")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("### 📊 Qualitative EDA")
+        st.markdown("Categorical analysis and distribution charts")
+    with col2:
+        st.markdown("### 🤖 LLM Insights")
+        st.markdown("AI-powered insights from your data using Groq")
+    with col3:
+        st.markdown("### 🚀 Getting Started")
+        st.markdown("1. Upload a file\n2. Clean if needed\n3. Explore & analyze\n4. Get AI insights")
